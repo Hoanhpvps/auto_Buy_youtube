@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - YouTube Auto Order</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 YouTube Auto Order Tool</h1>
+            <p>Powered by TUTMXH.COM API - Chạy 24/7</p>
+            <a href="/logout" class="logout-btn">Đăng xuất</a>
+        </div>
+
+        <div class="content">
+            <!-- API Configuration -->
+            <div class="section">
+                <h2>⚙️ Cấu hình API</h2>
+                <div class="form-group">
+                    <label>API Key:</label>
+                    <input type="text" id="apiKey" value="<%= apiKey %>" placeholder="Nhập API key từ TUTMXH.COM">
+                </div>
+                <div class="stats-grid" style="margin-top: 20px;">
+                    <div class="stat-card">
+                        <div class="stat-value" id="balance">$<%= balance %></div>
+                        <div class="stat-label">Số dư</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value"><%= totalChannels %></div>
+                        <div class="stat-label">Tổng số kênh</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value"><%= runningChannels %></div>
+                        <div class="stat-label">Đang chạy</div>
+                    </div>
+                </div>
+                <div style="margin-top: 15px;">
+                    <button onclick="saveApiKey()">💾 Lưu API Key</button>
+                    <button onclick="checkBalance()" class="success">💰 Kiểm tra số dư</button>
+                    <button onclick="loadServices()" class="warning">🔄 Tải dịch vụ</button>
+                </div>
+            </div>
+
+            <!-- Channel Management -->
+            <div class="section">
+                <h2>📺 Quản lý kênh (<%= channels.length %>)</h2>
+                <button onclick="showAddChannelModal()">➕ Thêm kênh mới</button>
+                <button onclick="startAllChannels()" class="success">▶️ Chạy tất cả</button>
+                <button onclick="stopAllChannels()" class="danger">⏹️ Dừng tất cả</button>
+                
+                <div id="channelsList" style="margin-top: 20px;">
+                    <% if (channels.length === 0) { %>
+                        <div class="no-data">Chưa có kênh nào. Nhấn "Thêm kênh mới" để bắt đầu.</div>
+                    <% } else { %>
+                        <% channels.forEach(channel => { %>
+                            <div class="channel-card <%= channel.is_running ? 'running' : 'stopped' %>">
+                                <div class="channel-header">
+                                    <div class="channel-info">
+                                        <div class="channel-name">📺 <%= channel.name %></div>
+                                        <div class="channel-id">ID: <%= channel.id %></div>
+                                        <% if (channel.last_checked) { %>
+                                            <div class="last-check">
+                                                Kiểm tra lần cuối: <%= new Date(channel.last_checked).toLocaleString('vi-VN') %>
+                                            </div>
+                                        <% } %>
+                                    </div>
+                                    <div class="channel-status">
+                                        <span class="status-badge <%= channel.is_running ? 'status-running' : 'status-stopped' %>">
+                                            <%= channel.is_running ? '▶️ Đang chạy' : '⏹️ Đã dừng' %>
+                                        </span>
+                                    </div>
+                                </div>
+                                
+                                <div class="schedule-info">
+                                    ⏰ Lịch kiểm tra: <%= channel.schedule || 'Mỗi 5 phút' %>
+                                </div>
+                                
+                                <div class="channel-services">
+                                    <strong>🎯 Dịch vụ đang chạy:</strong><br>
+                                    <small>
+                                        <% if (channel.services.length > 0) { %>
+                                            <%= channel.services.map(s => {
+                                                const service = allServices.find(as => as.service == s.service_id);
+                                                return service ? `${service.name} (${s.quantity})` : `Service #${s.service_id} (${s.quantity})`;
+                                            }).join(', ') %>
+                                        <% } else { %>
+                                            Chưa chọn dịch vụ
+                                        <% } %>
+                                    </small>
+                                </div>
+                                
+                                <div class="channel-stats">
+                                    <div class="stat-item">
+                                        <div class="stat-value"><%= channel.stats.videosProcessed %></div>
+                                        <div class="stat-label">Video xử lý</div>
+                                    </div>
+                                    <div class="stat-item">
+                                        <div class="stat-value"><%= channel.stats.ordersCreated %></div>
+                                        <div class="stat-label">Đơn tạo</div>
+                                    </div>
+                                    <div class="stat-item">
+                                        <div class="stat-value"><%= channel.videosCount %></div>
+                                        <div class="stat-label">Video trong lịch sử</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="channel-controls">
+                                    <% if (!channel.is_running) { %>
+                                        <button class="success" onclick="startChannel('<%= channel.id %>')">▶️ Chạy</button>
+                                    <% } else { %>
+                                        <button class="danger" onclick="stopChannel('<%= channel.id %>')">⏹️ Dừng</button>
+                                    <% } %>
+                                    <button class="warning" onclick="showEditChannelModal('<%= channel.id %>')">✏️ Sửa</button>
+                                    <button onclick="viewChannelHistory('<%= channel.id %>')">📋 Lịch sử</button>
+                                    <button class="danger" onclick="deleteChannel('<%= channel.id %>')">🗑️ Xóa</button>
+                                </div>
+                            </div>
+                        <% }) %>
+                    <% } %>
+                </div>
+            </div>
+
+            <!-- Logs -->
+            <div class="section">
+                <h2>📝 Nhật ký hoạt động</h2>
+                <button onclick="loadLogs()">🔄 Tải lại</button>
+                <button onclick="clearLogs()" class="danger">🧹 Xóa logs</button>
+                <div id="logs" class="logs" style="margin-top: 15px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Channel Modal -->
+    <div id="addChannelModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeAddChannelModal()">&times;</span>
+            <div class="modal-header">➕ Thêm kênh mới</div>
+            
+            <div class="form-group">
+                <label>Tên kênh:</label>
+                <input type="text" id="newChannelName" placeholder="VD: Kênh Gaming của tôi">
+            </div>
+            
+            <div class="form-group">
+                <label>Channel ID:</label>
+                <input type="text" id="newChannelId" placeholder="UCxxxxxxx...">
+                <small style="color: #666; display: block; margin-top: 5px;">
+                    💡 Lấy từ URL: youtube.com/channel/<strong>UCxxx...</strong>
+                </small>
+            </div>
+            
+            <div class="form-group">
+                <label>Lịch kiểm tra (để trống = mỗi 5 phút):</label>
+                <input type="text" id="newChannelSchedule" placeholder="VD: 17:00,17:01,17:02,18:00">
+                <small style="color: #666; display: block; margin-top: 5px;">
+                    ⏰ Hệ thống sẽ tự động chạy vào đúng giờ đã lên lịch
+                </small>
+            </div>
+            
+            <h3 style="margin: 20px 0 10px 0; color: #667eea;">Chọn dịch vụ:</h3>
+            <div id="modalServicesList" style="max-height: 300px; overflow-y: auto;"></div>
+            
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button onclick="addNewChannel()">✅ Thêm kênh</button>
+                <button class="danger" onclick="closeAddChannelModal()">❌ Hủy</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Channel Modal -->
+    <div id="editChannelModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeEditChannelModal()">&times;</span>
+            <div class="modal-header">✏️ Chỉnh sửa kênh</div>
+            <input type="hidden" id="editChannelId">
+            
+            <div class="form-group">
+                <label>Tên kênh:</label>
+                <input type="text" id="editChannelName">
+            </div>
+            
+            <div class="form-group">
+                <label>Lịch kiểm tra:</label>
+                <input type="text" id="editChannelSchedule" placeholder="VD: 17:00,18:00">
+            </div>
+            
+            <h3 style="margin: 20px 0 10px 0; color: #667eea;">Dịch vụ:</h3>
+            <div id="editServicesList" style="max-height: 300px; overflow-y: auto;"></div>
+            
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button onclick="saveChannelEdit()">💾 Lưu thay đổi</button>
+                <button class="danger" onclick="closeEditChannelModal()">❌ Hủy</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const allServices = <%- JSON.stringify(allServices) %>;
+        const channelsData = <%- JSON.stringify(channels) %>;
+    </script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
