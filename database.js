@@ -13,6 +13,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     schedule TEXT,
+    content_type TEXT DEFAULT 'both',
     is_running INTEGER DEFAULT 0,
     last_video_id TEXT,
     last_checked TEXT,
@@ -33,6 +34,7 @@ db.exec(`
     video_id TEXT NOT NULL,
     video_title TEXT,
     video_url TEXT,
+    is_livestream INTEGER DEFAULT 0,
     processed_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
     UNIQUE(channel_id, video_id)
@@ -73,7 +75,7 @@ const db_functions = {
   },
 
   setConfig: (key, value) => {
-    const stmt = db.prepare('INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, datetime("now"))');
+    const stmt = db.prepare('INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)');
     stmt.run(key, value);
   },
 
@@ -88,10 +90,10 @@ const db_functions = {
 
   addChannel: (channel) => {
     const stmt = db.prepare(`
-      INSERT INTO channels (id, name, schedule, is_running, last_video_id, last_checked)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO channels (id, name, schedule, content_type, is_running, last_video_id, last_checked)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    stmt.run(channel.id, channel.name, channel.schedule || '', 0, null, null);
+    stmt.run(channel.id, channel.name, channel.schedule || '', channel.content_type || 'both', 0, null, null);
   },
 
   updateChannel: (id, data) => {
@@ -100,6 +102,7 @@ const db_functions = {
     
     if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name); }
     if (data.schedule !== undefined) { fields.push('schedule = ?'); values.push(data.schedule); }
+    if (data.content_type !== undefined) { fields.push('content_type = ?'); values.push(data.content_type); }
     if (data.is_running !== undefined) { fields.push('is_running = ?'); values.push(data.is_running ? 1 : 0); }
     if (data.last_video_id !== undefined) { fields.push('last_video_id = ?'); values.push(data.last_video_id); }
     if (data.last_checked !== undefined) { fields.push('last_checked = ?'); values.push(data.last_checked); }
@@ -139,12 +142,12 @@ const db_functions = {
     return db.prepare('SELECT * FROM processed_videos WHERE channel_id = ? AND video_id = ?').get(channelId, videoId);
   },
 
-  addProcessedVideo: (channelId, videoId, title, url) => {
+  addProcessedVideo: (channelId, videoId, title, url, isLivestream = false) => {
     const stmt = db.prepare(`
-      INSERT INTO processed_videos (channel_id, video_id, video_title, video_url)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO processed_videos (channel_id, video_id, video_title, video_url, is_livestream)
+      VALUES (?, ?, ?, ?, ?)
     `);
-    const result = stmt.run(channelId, videoId, title, url);
+    const result = stmt.run(channelId, videoId, title, url, isLivestream ? 1 : 0);
     return result.lastInsertRowid;
   },
 
