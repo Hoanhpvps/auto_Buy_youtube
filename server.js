@@ -7,7 +7,8 @@ const api = require('./tutmxh-api');
 const scheduler = require('./scheduler');
 
 const app = express();
-app.set('trust proxy', 1);
+app.set('trust proxy', 1); // ✅ FIX: Cần thiết cho Render/reverse proxy
+
 const PORT = process.env.PORT || 3000;
 
 // Middleware
@@ -22,7 +23,7 @@ app.use(session({
   saveUninitialized: false,
   cookie: { 
     secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // ✅ FIX: Cần cho HTTPS trên Render
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
@@ -110,21 +111,19 @@ app.post('/api/set-api-key', requireAuth, async (req, res) => {
   }
   
   try {
-    // Test API key
+    // Test API key - sẽ throw nếu lỗi
     const balance = await api.checkBalance(apiKey);
     
-    if (balance !== null) {
-      db.setConfig('api_key', apiKey);
-      db.addLog(`✅ Đã cập nhật API Key - Số dư: $${balance}`, 'success');
-      
-      // Load services
-      await api.getServices(apiKey);
-      
-      res.json({ success: true, balance: balance });
-    } else {
-      res.json({ success: false, error: 'API Key không hợp lệ' });
-    }
+    db.setConfig('api_key', apiKey);
+    db.addLog(`✅ Đã cập nhật API Key - Số dư: $${balance}`, 'success');
+    
+    // Load services
+    await api.getServices(apiKey);
+    
+    res.json({ success: true, balance: balance });
   } catch (error) {
+    // ✅ FIX: Trả về lỗi thực sự từ TUTMXH thay vì "API Key không hợp lệ" chung chung
+    console.error('set-api-key error:', error.message);
     res.json({ success: false, error: error.message });
   }
 });
@@ -136,8 +135,12 @@ app.get('/api/balance', requireAuth, async (req, res) => {
     return res.json({ success: false, error: 'API Key chưa được cấu hình' });
   }
   
-  const balance = await api.checkBalance(apiKey);
-  res.json({ success: true, balance: balance });
+  try {
+    const balance = await api.checkBalance(apiKey);
+    res.json({ success: true, balance: balance });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
 });
 
 // Load services
@@ -147,13 +150,17 @@ app.post('/api/load-services', requireAuth, async (req, res) => {
     return res.json({ success: false, error: 'API Key chưa được cấu hình' });
   }
   
-  const services = await api.getServices(apiKey);
-  res.json({ success: true, count: services.length });
+  try {
+    const services = await api.getServices(apiKey);
+    res.json({ success: true, count: services.length });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
 });
 
 // Add channel
 app.post('/api/channels', requireAuth, (req, res) => {
-  const { id, name, schedule, services } = req.body;
+  const { id, name, schedule, services, contentType } = req.body;
   
   if (!id || !name) {
     return res.json({ success: false, error: 'Channel ID và tên không được để trống' });
@@ -170,7 +177,12 @@ app.post('/api/channels', requireAuth, (req, res) => {
   }
   
   try {
-    db.addChannel({ id, name, schedule: schedule || '' });
+    db.addChannel({ 
+      id, 
+      name, 
+      schedule: schedule || '',
+      content_type: contentType || 'both'
+    });
     db.setChannelServices(id, services);
     db.addLog(`✅ Đã thêm kênh: ${name}`, 'success');
     
@@ -183,7 +195,7 @@ app.post('/api/channels', requireAuth, (req, res) => {
 // Update channel
 app.put('/api/channels/:id', requireAuth, (req, res) => {
   const { id } = req.params;
-  const { name, schedule, services } = req.body;
+  const { name, schedule, services, contentType } = req.body;
   
   const channel = db.getChannel(id);
   if (!channel) {
@@ -191,7 +203,11 @@ app.put('/api/channels/:id', requireAuth, (req, res) => {
   }
   
   try {
-    db.updateChannel(id, { name, schedule });
+    db.updateChannel(id, { 
+      name, 
+      schedule,
+      content_type: contentType
+    });
     
     if (services) {
       db.setChannelServices(id, services);
