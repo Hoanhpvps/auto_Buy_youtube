@@ -249,6 +249,12 @@ class Scheduler {
     });
   }
 
+  // ===== THÊM HÀM NÀY: Resume all active channels (alias của startAllActiveJobs) =====
+  async resumeAllChannels() {
+    console.log('📢 Resuming all active channels...');
+    await this.startAllActiveJobs();
+  }
+
   // Stop tất cả jobs
   stopAllJobs() {
     this.jobs.forEach(job => job.stop());
