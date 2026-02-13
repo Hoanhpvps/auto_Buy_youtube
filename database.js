@@ -168,6 +168,11 @@ class Database {
     });
   }
 
+  // ===== ALIAS: server.js gọi getAllChannels() =====
+  async getAllChannels() {
+    return await this.getChannels();
+  }
+
   // Lấy 1 kênh theo ID
   async getChannel(channelId) {
     await this.waitReady();
@@ -191,7 +196,8 @@ class Database {
   }
 
   // Cập nhật trạng thái kênh
-  updateChannelStatus(channelId, isActive) {
+  async updateChannelStatus(channelId, isActive) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.run(
         'UPDATE channels SET is_active = ? WHERE id = ?',
@@ -205,7 +211,8 @@ class Database {
   }
 
   // Cập nhật stats kênh
-  updateChannelStats(channelId, stats) {
+  async updateChannelStats(channelId, stats) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       const updates = [];
       const values = [];
@@ -236,7 +243,8 @@ class Database {
   }
 
   // Xóa kênh
-  deleteChannel(channelId) {
+  async deleteChannel(channelId) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.run('DELETE FROM channels WHERE id = ?', [channelId], function(err) {
         if (err) reject(err);
@@ -285,7 +293,8 @@ class Database {
   }
 
   // Lấy logs theo kênh
-  getLogsByChannel(channelId, limit = 50) {
+  async getLogsByChannel(channelId, limit = 50) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.all(
         'SELECT * FROM logs WHERE channel_id = ? ORDER BY timestamp DESC LIMIT ?',
@@ -299,7 +308,8 @@ class Database {
   }
 
   // Xóa logs cũ (giữ lại N logs mới nhất)
-  cleanOldLogs(keepCount = 1000) {
+  async cleanOldLogs(keepCount = 1000) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.run(
         `DELETE FROM logs WHERE id NOT IN (
@@ -315,7 +325,8 @@ class Database {
   }
 
   // Lưu setting
-  saveSetting(key, value) {
+  async saveSetting(key, value) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.run(
         'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
@@ -329,7 +340,8 @@ class Database {
   }
 
   // Lấy setting
-  getSetting(key) {
+  async getSetting(key) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.get('SELECT value FROM settings WHERE key = ?', [key], (err, row) => {
         if (err) reject(err);
@@ -339,7 +351,8 @@ class Database {
   }
 
   // Lấy tất cả settings
-  getAllSettings() {
+  async getAllSettings() {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.all('SELECT * FROM settings', [], (err, rows) => {
         if (err) reject(err);
@@ -355,7 +368,8 @@ class Database {
   }
 
   // Lấy thống kê tổng quan
-  getStats() {
+  async getStats() {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       const stats = {
         totalChannels: 0,
