@@ -3,76 +3,106 @@ const path = require('path');
 
 class Database {
   constructor() {
-    const dbPath = path.join(__dirname, 'data.db');
-    this.db = new sqlite3.Database(dbPath, (err) => {
-      if (err) {
-        console.error('Error opening database:', err);
-      } else {
-        console.log('Connected to SQLite database');
-        this.initTables();
-      }
+    this.isReady = false;
+    this.readyPromise = new Promise((resolve, reject) => {
+      const dbPath = path.join(__dirname, 'data.db');
+      this.db = new sqlite3.Database(dbPath, (err) => {
+        if (err) {
+          console.error('Error opening database:', err);
+          reject(err);
+        } else {
+          console.log('Connected to SQLite database');
+          this.initTables()
+            .then(() => {
+              this.isReady = true;
+              console.log('✅ Database tables initialized');
+              resolve();
+            })
+            .catch(reject);
+        }
+      });
     });
   }
 
+  // ===== QUAN TRỌNG: Đợi database sẵn sàng =====
+  async waitReady() {
+    if (!this.isReady) {
+      await this.readyPromise;
+    }
+    return true;
+  }
+
   initTables() {
-    // Bảng channels
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS channels (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        channel_id TEXT NOT NULL UNIQUE,
-        schedule TEXT,
-        service_id INTEGER,
-        quantity INTEGER,
-        is_active INTEGER DEFAULT 0,
-        total_orders INTEGER DEFAULT 0,
-        last_check TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    return new Promise((resolve, reject) => {
+      // Tạo tất cả tables tuần tự
+      this.db.serialize(() => {
+        // Bảng channels
+        this.db.run(`
+          CREATE TABLE IF NOT EXISTS channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            channel_id TEXT NOT NULL UNIQUE,
+            schedule TEXT,
+            service_id INTEGER,
+            quantity INTEGER,
+            is_active INTEGER DEFAULT 0,
+            total_orders INTEGER DEFAULT 0,
+            last_check TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
 
-    // Bảng orders - ===== QUAN TRỌNG: Thêm cột video_id =====
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        channel_id INTEGER,
-        video_id TEXT NOT NULL,
-        video_url TEXT NOT NULL,
-        service_id INTEGER,
-        quantity INTEGER,
-        order_id TEXT,
-        status TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (channel_id) REFERENCES channels(id)
-      )
-    `);
+        // Bảng orders - ===== QUAN TRỌNG: Thêm cột video_id =====
+        this.db.run(`
+          CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id INTEGER,
+            video_id TEXT NOT NULL,
+            video_url TEXT NOT NULL,
+            service_id INTEGER,
+            quantity INTEGER,
+            order_id TEXT,
+            status TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (channel_id) REFERENCES channels(id)
+          )
+        `);
 
-    // Bảng logs
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        channel_id INTEGER,
-        channel_name TEXT,
-        video_id TEXT,
-        order_id TEXT,
-        status TEXT,
-        message TEXT,
-        timestamp TEXT,
-        FOREIGN KEY (channel_id) REFERENCES channels(id)
-      )
-    `);
+        // Bảng logs
+        this.db.run(`
+          CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id INTEGER,
+            channel_name TEXT,
+            video_id TEXT,
+            order_id TEXT,
+            status TEXT,
+            message TEXT,
+            timestamp TEXT,
+            FOREIGN KEY (channel_id) REFERENCES channels(id)
+          )
+        `);
 
-    // Bảng settings
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-      )
-    `);
+        // Bảng settings
+        this.db.run(`
+          CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+          )
+        `, (err) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
+    });
   }
 
   // ===== QUAN TRỌNG: Hàm kiểm tra video đã đặt hàng chưa =====
-  getOrderHistory() {
+  async getOrderHistory() {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.all('SELECT * FROM orders ORDER BY created_at DESC', [], (err, rows) => {
         if (err) reject(err);
@@ -82,7 +112,8 @@ class Database {
   }
 
   // ===== QUAN TRỌNG: Lưu đơn hàng (phải có video_id) =====
-  saveOrder(orderData) {
+  async saveOrder(orderData) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       const sql = `
         INSERT INTO orders (channel_id, video_id, video_url, service_id, quantity, order_id, status)
@@ -105,7 +136,8 @@ class Database {
   }
 
   // Thêm kênh mới
-  addChannel(channelData) {
+  async addChannel(channelData) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       const sql = `
         INSERT INTO channels (name, channel_id, schedule, service_id, quantity)
@@ -126,7 +158,8 @@ class Database {
   }
 
   // Lấy tất cả kênh
-  getChannels() {
+  async getChannels() {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.all('SELECT * FROM channels ORDER BY created_at DESC', [], (err, rows) => {
         if (err) reject(err);
@@ -136,7 +169,8 @@ class Database {
   }
 
   // Lấy 1 kênh theo ID
-  getChannel(channelId) {
+  async getChannel(channelId) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.get('SELECT * FROM channels WHERE id = ?', [channelId], (err, row) => {
         if (err) reject(err);
@@ -146,7 +180,8 @@ class Database {
   }
 
   // Lấy các kênh đang active
-  getActiveChannels() {
+  async getActiveChannels() {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.all('SELECT * FROM channels WHERE is_active = 1', [], (err, rows) => {
         if (err) reject(err);
@@ -211,7 +246,8 @@ class Database {
   }
 
   // Thêm log
-  addLog(logData) {
+  async addLog(logData) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       const sql = `
         INSERT INTO logs (channel_id, channel_name, video_id, order_id, status, message, timestamp)
@@ -234,7 +270,8 @@ class Database {
   }
 
   // Lấy logs (mới nhất trước)
-  getLogs(limit = 100) {
+  async getLogs(limit = 100) {
+    await this.waitReady();
     return new Promise((resolve, reject) => {
       this.db.all(
         'SELECT * FROM logs ORDER BY timestamp DESC LIMIT ?',
