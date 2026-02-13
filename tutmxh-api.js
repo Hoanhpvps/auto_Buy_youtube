@@ -1,178 +1,308 @@
-const fetch = require('node-fetch');
-const { URLSearchParams } = require('url');
-const { parseStringPromise } = require('xml2js');
-const { google } = require('googleapis');
-const db = require('./database');
+const axios = require('axios');
 
-const API_URL = 'https://tutmxh.com/api/v2';
-
-// Initialize YouTube API
-let youtube = null;
-if (process.env.YOUTUBE_API_KEY) {
-  youtube = google.youtube({
-    version: 'v3',
-    auth: process.env.YOUTUBE_API_KEY
-  });
-}
-
-// Call TUTMXH API
-async function callAPI(params) {
-  const formData = new URLSearchParams();
-  for (const key in params) {
-    formData.append(key, params[key]);
+class TutmxhAPI {
+  constructor() {
+    this.baseUrl = 'https://tutmxh.com/api/v2';
+    this.apiKey = null;
   }
 
-  const response = await fetch(API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: formData.toString()
-  });
-
-  if (!response.ok) {
-    throw new Error(`Lỗi kết nối tới TUTMXH: HTTP ${response.status}`);
+  setApiKey(key) {
+    this.apiKey = key;
   }
 
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch (e) {
-    throw new Error(`Phản hồi không phải JSON: ${text.substring(0, 200)}`);
-  }
-}
-
-// Check balance
-async function checkBalance(apiKey) {
-  // ✅ FIX: Ném lỗi thực sự thay vì trả về null
-  const data = await callAPI({
-    key: apiKey,
-    action: 'balance'
-  });
-
-  if (data.error) {
-    throw new Error(data.error);
-  }
-
-  if (data.balance !== undefined) {
-    db.setConfig('last_balance', data.balance.toString());
-    return parseFloat(data.balance);
-  }
-
-  throw new Error('Phản hồi API không hợp lệ: ' + JSON.stringify(data));
-}
-
-// Get services
-async function getServices(apiKey) {
-  // ✅ FIX: Ném lỗi thực sự thay vì trả về []
-  const data = await callAPI({
-    key: apiKey,
-    action: 'services'
-  });
-
-  if (data.error) {
-    throw new Error(data.error);
-  }
-
-  if (Array.isArray(data)) {
-    const youtubeServices = data.filter(s =>
-      s.category && s.category.toLowerCase().includes('youtube')
-    );
-    db.setConfig('services', JSON.stringify(youtubeServices));
-    return youtubeServices;
-  }
-
-  throw new Error('Phản hồi services không hợp lệ: ' + JSON.stringify(data));
-}
-
-// Create order
-async function createOrder(apiKey, link, serviceId, quantity) {
-  const data = await callAPI({
-    key: apiKey,
-    action: 'add',
-    service: serviceId,
-    link: link,
-    quantity: quantity
-  });
-
-  if (data.order) {
-    return data.order;
-  } else if (data.error) {
-    throw new Error(data.error);
-  }
-  return null;
-}
-
-// Fetch latest video from YouTube RSS
-async function fetchLatestVideo(channelId) {
-  try {
-    const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
-    const response = await fetch(rssUrl);
-    const text = await response.text();
-
-    const result = await parseStringPromise(text);
-
-    if (!result.feed || !result.feed.entry || result.feed.entry.length === 0) {
-      return null;
+  async request(data) {
+    if (!this.apiKey) {
+      throw new Error('API Key chưa được cấu hình');
     }
 
-    const entry = result.feed.entry[0];
+    try {
+      const response = await axios.post(this.baseUrl, {
+        key: this.apiKey,
+        ...data
+      }, {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      });
 
-    const videoId = entry['yt:videoId'][0];
-    const title = entry.title[0];
-    const published = new Date(entry.published[0]);
-    const url = `https://www.youtube.com/watch?v=${videoId}`;
+      return response.data;
+    } catch (error) {
+      console.error('API Request Error:', error.message);
+      throw error;
+    }
+  }
 
-    return { videoId, title, url, published };
-  } catch (error) {
-    console.error('Error fetching video:', error);
-    return null;
+  // Lấy danh sách dịch vụ
+  async getServices() {
+    try {
+      const data = await this.request({ action: 'services' });
+      return {
+        success: true,
+        data: data
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Tạo đơn hàng
+  async createOrder(serviceId, link, quantity, options = {}) {
+    try {
+      const requestData = {
+        action: 'add',
+        service: serviceId,
+        link: link,
+        quantity: quantity
+      };
+
+      // Thêm các tham số tùy chọn nếu có
+      if (options.list) requestData.list = options.list;
+      if (options.suggest) requestData.suggest = options.suggest;
+      if (options.search) requestData.search = options.search;
+      if (options.comments) requestData.comments = options.comments;
+
+      const data = await this.request(requestData);
+
+      // ===== FIX: API mới trả về { "order": 99999 } =====
+      if (data.order) {
+        return {
+          success: true,
+          data: {
+            order: data.order  // Đảm bảo trả về đúng key "order"
+          }
+        };
+      } else if (data.error) {
+        return {
+          success: false,
+          error: data.error
+        };
+      } else {
+        return {
+          success: false,
+          error: 'Không nhận được mã đơn hàng từ API'
+        };
+      }
+
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Kiểm tra trạng thái đơn hàng
+  async getOrderStatus(orderId) {
+    try {
+      const data = await this.request({
+        action: 'status',
+        order: orderId
+      });
+
+      return {
+        success: true,
+        data: data
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Kiểm tra nhiều đơn hàng cùng lúc (tối đa 100)
+  async getMultipleOrderStatus(orderIds) {
+    try {
+      const data = await this.request({
+        action: 'status',
+        orders: orderIds.join(',')
+      });
+
+      return {
+        success: true,
+        data: data
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Kiểm tra số dư
+  async getBalance() {
+    try {
+      const data = await this.request({ action: 'balance' });
+      return {
+        success: true,
+        data: data
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Tạo refill
+  async createRefill(orderId) {
+    try {
+      const data = await this.request({
+        action: 'refill',
+        order: orderId
+      });
+
+      return {
+        success: true,
+        data: data
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Tạo nhiều refill cùng lúc
+  async createMultipleRefill(orderIds) {
+    try {
+      const data = await this.request({
+        action: 'refill',
+        orders: orderIds.join(',')
+      });
+
+      return {
+        success: true,
+        data: data
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Kiểm tra trạng thái refill
+  async getRefillStatus(refillId) {
+    try {
+      const data = await this.request({
+        action: 'refill_status',
+        refill: refillId
+      });
+
+      return {
+        success: true,
+        data: data
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Lấy danh sách products
+  async getProducts() {
+    try {
+      const data = await this.request({ action: 'products' });
+      return {
+        success: true,
+        data: data
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Tạo đơn hàng product
+  async createProductOrder(productId, quantity, require) {
+    try {
+      const data = await this.request({
+        action: 'add_product_order',
+        product: productId,
+        quantity: quantity,
+        require: require
+      });
+
+      // ===== FIX: Product order cũng trả về { "order": 99999 } =====
+      if (data.order) {
+        return {
+          success: true,
+          data: {
+            order: data.order
+          }
+        };
+      } else if (data.error) {
+        return {
+          success: false,
+          error: data.error
+        };
+      } else {
+        return {
+          success: false,
+          error: 'Không nhận được mã đơn hàng từ API'
+        };
+      }
+
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Kiểm tra trạng thái product order
+  async getProductOrderStatus(orderId) {
+    try {
+      const data = await this.request({
+        action: 'product_order_status',
+        order: orderId
+      });
+
+      return {
+        success: true,
+        data: data
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Lấy kết quả product order
+  async getProductResult(orderId) {
+    try {
+      const data = await this.request({
+        action: 'result_product',
+        order: orderId
+      });
+
+      return {
+        success: true,
+        data: data
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
   }
 }
 
-// Check if video is recent (published in last N minutes)
-function isRecentVideo(publishedDate, maxMinutes = 15) {
-  const now = new Date();
-  const diffMinutes = (now - publishedDate) / 1000 / 60;
-  return diffMinutes <= maxMinutes;
-}
-
-// Check if video is livestream using YouTube Data API
-async function checkIfLivestream(videoId) {
-  if (!youtube) return null;
-
-  try {
-    const response = await youtube.videos.list({
-      part: 'snippet,liveStreamingDetails',
-      id: videoId
-    });
-
-    if (!response.data.items || response.data.items.length === 0) return null;
-
-    const video = response.data.items[0];
-    const snippet = video.snippet;
-    const broadcastContent = snippet.liveBroadcastContent;
-    const isLivestream = broadcastContent === 'live' || broadcastContent === 'upcoming' ||
-      (video.liveStreamingDetails !== undefined);
-
-    return {
-      isLivestream,
-      status: broadcastContent,
-      scheduledStartTime: video.liveStreamingDetails?.scheduledStartTime || null,
-      actualStartTime: video.liveStreamingDetails?.actualStartTime || null
-    };
-  } catch (error) {
-    console.error('Error checking livestream status:', error);
-    return null;
-  }
-}
-
-module.exports = {
-  callAPI,
-  checkBalance,
-  getServices,
-  createOrder,
-  fetchLatestVideo,
-  isRecentVideo,
-  checkIfLivestream
-};
+module.exports = new TutmxhAPI();
