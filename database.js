@@ -173,6 +173,86 @@ class Database {
     return await this.getChannels();
   }
 
+  // ===== THÊM: getChannelByChannelId (tìm theo channel_id thay vì id) =====
+  async getChannelByChannelId(channelId) {
+    await this.waitReady();
+    return new Promise((resolve, reject) => {
+      this.db.get('SELECT * FROM channels WHERE channel_id = ?', [channelId], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+  }
+
+  // ===== THÊM: getAllOrders =====
+  async getAllOrders() {
+    await this.waitReady();
+    return new Promise((resolve, reject) => {
+      this.db.all('SELECT * FROM orders ORDER BY created_at DESC', [], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      });
+    });
+  }
+
+  // ===== THÊM: getOrdersByChannel =====
+  async getOrdersByChannel(channelId) {
+    await this.waitReady();
+    return new Promise((resolve, reject) => {
+      this.db.all(
+        'SELECT * FROM orders WHERE channel_id = ? ORDER BY created_at DESC',
+        [channelId],
+        (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows || []);
+        }
+      );
+    });
+  }
+
+  // ===== THÊM: getOrder =====
+  async getOrder(orderId) {
+    await this.waitReady();
+    return new Promise((resolve, reject) => {
+      this.db.get('SELECT * FROM orders WHERE id = ?', [orderId], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+  }
+
+  // ===== THÊM: updateOrder =====
+  async updateOrder(orderId, orderData) {
+    await this.waitReady();
+    return new Promise((resolve, reject) => {
+      const updates = [];
+      const values = [];
+
+      if (orderData.status !== undefined) {
+        updates.push('status = ?');
+        values.push(orderData.status);
+      }
+      if (orderData.order_id !== undefined) {
+        updates.push('order_id = ?');
+        values.push(orderData.order_id);
+      }
+
+      if (updates.length === 0) {
+        resolve({ changes: 0 });
+        return;
+      }
+
+      values.push(orderId);
+
+      const sql = `UPDATE orders SET ${updates.join(', ')} WHERE id = ?`;
+      
+      this.db.run(sql, values, function(err) {
+        if (err) reject(err);
+        else resolve({ changes: this.changes });
+      });
+    });
+  }
+
   // Lấy 1 kênh theo ID
   async getChannel(channelId) {
     await this.waitReady();
@@ -348,6 +428,16 @@ class Database {
         else resolve(row ? row.value : null);
       });
     });
+  }
+
+  // ===== ALIAS: server.js có thể gọi getConfig thay vì getSetting =====
+  async getConfig(key) {
+    return await this.getSetting(key);
+  }
+
+  // ===== ALIAS: saveConfig =====
+  async saveConfig(key, value) {
+    return await this.saveSetting(key, value);
   }
 
   // Lấy tất cả settings
