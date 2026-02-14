@@ -75,7 +75,7 @@ const db_functions = {
   },
 
   setConfig: (key, value) => {
-    const stmt = db.prepare('INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, datetime("now"))');
+    const stmt = db.prepare("INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, datetime('now'))");
     stmt.run(key, value);
   },
 
