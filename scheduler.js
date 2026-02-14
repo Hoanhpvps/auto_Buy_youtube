@@ -5,6 +5,15 @@ const api = require('./tutmxh-api');
 // Active intervals for continuous monitoring
 const channelIntervals = {};
 
+// Lấy thời gian hiện tại theo múi giờ Việt Nam (GMT+7)
+// Render.com chạy ở UTC nên phải convert thủ công
+function getNowVN() {
+  const now = new Date();
+  // UTC + 7 hours
+  const vnTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+  return vnTime;
+}
+
 // Parse schedule string
 function parseSchedule(scheduleStr) {
   if (!scheduleStr) return [];
@@ -30,11 +39,11 @@ function parseSchedule(scheduleStr) {
   return result;
 }
 
-// Check if current time matches schedule
+// Check if current time matches schedule (dùng giờ VN GMT+7)
 function isScheduledTime(scheduleTimes) {
-  const now = new Date();
+  const nowVN = getNowVN();
   return scheduleTimes.some(time => 
-    time.hours === now.getHours() && time.minutes === now.getMinutes()
+    time.hours === nowVN.getUTCHours() && time.minutes === nowVN.getUTCMinutes()
   );
 }
 
@@ -51,7 +60,8 @@ async function checkChannel(channelId) {
   
   try {
     const now = new Date();
-    const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+    const nowVN = getNowVN();
+    const timeStr = `${nowVN.getUTCHours().toString().padStart(2,'0')}:${nowVN.getUTCMinutes().toString().padStart(2,'0')} (VN)`;
     
     db.addLog(`🔍 Kiểm tra video mới lúc ${timeStr}...`, 'info', channelId);
     
@@ -255,7 +265,8 @@ function startChannelMonitoring(channelId) {
         
         if (isScheduledTime(scheduleTimes)) {
           lastCheckMinute = currentMinute;
-          const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+          const nowVN2 = getNowVN();
+          const timeStr = `${nowVN2.getUTCHours().toString().padStart(2,'0')}:${nowVN2.getUTCMinutes().toString().padStart(2,'0')} (VN)`;
           db.addLog(`⏰ ĐÃ ĐẾN GIỜ CHẠY: ${timeStr}`, 'success', channelId);
           checkChannel(channelId);
         }
