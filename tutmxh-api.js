@@ -44,15 +44,23 @@ async function checkBalance(apiKey) {
       key: apiKey,
       action: 'balance'
     });
-    
+
+    // API tra ve loi ro rang
+    if (data.error) {
+      throw new Error(data.error);
+    }
+
     if (data.balance !== undefined) {
       db.setConfig('last_balance', data.balance.toString());
       return parseFloat(data.balance);
     }
-    return null;
+
+    // Response khong co balance va khong co error
+    console.warn('Unexpected balance response:', JSON.stringify(data));
+    throw new Error('Phan hoi API khong hop le: ' + JSON.stringify(data));
   } catch (error) {
-    console.error('Error checking balance:', error);
-    return null;
+    console.error('Error checking balance:', error.message);
+    throw error;
   }
 }
 
