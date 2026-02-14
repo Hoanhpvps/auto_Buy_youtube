@@ -77,6 +77,17 @@
                                     ⏰ Lịch kiểm tra: <%= channel.schedule || 'Mỗi 5 phút' %>
                                 </div>
                                 
+                                <div style="background: #f0f0f0; padding: 10px; border-radius: 5px; margin: 10px 0; font-size: 13px;">
+                                    🎯 Loại nội dung: 
+                                    <% if (channel.content_type === 'video_only') { %>
+                                        📹 Chỉ video thường
+                                    <% } else if (channel.content_type === 'livestream_only') { %>
+                                        🔴 Chỉ livestream
+                                    <% } else { %>
+                                        🎬 Cả hai
+                                    <% } %>
+                                </div>
+                                
                                 <div class="channel-services">
                                     <strong>🎯 Dịch vụ đang chạy:</strong><br>
                                     <small>
@@ -159,6 +170,22 @@
                 </small>
             </div>
             
+            <div class="form-group">
+                <label>Loại nội dung:</label>
+                <select id="newChannelContentType">
+                    <option value="both">🎬 Cả video thường và livestream</option>
+                    <option value="video_only">📹 Chỉ video thường</option>
+                    <option value="livestream_only">🔴 Chỉ livestream</option>
+                </select>
+                <small style="color: #666; display: block; margin-top: 5px;">
+                    <% if (process.env.YOUTUBE_API_KEY) { %>
+                        ✅ YouTube API đã cấu hình - Có thể phân biệt livestream
+                    <% } else { %>
+                        ⚠️ Chưa cấu hình YouTube API Key - Không thể phân biệt livestream
+                    <% } %>
+                </small>
+            </div>
+            
             <h3 style="margin: 20px 0 10px 0; color: #667eea;">Chọn dịch vụ:</h3>
             <div id="modalServicesList" style="max-height: 300px; overflow-y: auto;"></div>
             
@@ -184,6 +211,15 @@
             <div class="form-group">
                 <label>Lịch kiểm tra:</label>
                 <input type="text" id="editChannelSchedule" placeholder="VD: 17:00,18:00">
+            </div>
+            
+            <div class="form-group">
+                <label>Loại nội dung:</label>
+                <select id="editChannelContentType">
+                    <option value="both">🎬 Cả video thường và livestream</option>
+                    <option value="video_only">📹 Chỉ video thường</option>
+                    <option value="livestream_only">🔴 Chỉ livestream</option>
+                </select>
             </div>
             
             <h3 style="margin: 20px 0 10px 0; color: #667eea;">Dịch vụ:</h3>

@@ -1,62 +1,61 @@
+require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
-const bodyParser = require('body-parser');
 const path = require('path');
 const db = require('./database');
+const api = require('./tutmxh-api');
 const scheduler = require('./scheduler');
-const tutmxhApi = require('./tutmxh-api');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static('public'));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Session configuration
+// Session
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-this',
   resave: false,
   saveUninitialized: false,
-  cookie: {
-    secure: process.env.NODE_ENV === 'production' ? false : false, // Set to true if using HTTPS
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production',
     maxAge: 24 * 60 * 60 * 1000 // 24 hours
   }
 }));
 
-// View engine setup
+// View engine
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// ===== MIDDLEWARE: Require authentication =====
+// Auth middleware
 function requireAuth(req, res, next) {
-  if (req.session && req.session.authenticated) {
-    return next();
+  if (req.session.authenticated) {
+    next();
+  } else {
+    res.redirect('/login');
   }
-  res.redirect('/login');
 }
 
-// ===== ROUTES =====
+// Routes
 
 // Login page
 app.get('/login', (req, res) => {
+  if (req.session.authenticated) {
+    return res.redirect('/');
+  }
   res.render('login', { error: null });
 });
 
-// Login POST
 app.post('/login', (req, res) => {
   const { username, password } = req.body;
   
-  const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
-  
-  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+  if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD) {
     req.session.authenticated = true;
-    req.session.username = username;
     res.redirect('/');
   } else {
-    res.render('login', { error: 'Invalid username or password' });
+    res.render('login', { error: 'Tên đăng nhập hoặc mật khẩu không đúng' });
   }
 });
 
@@ -66,389 +65,243 @@ app.get('/logout', (req, res) => {
   res.redirect('/login');
 });
 
-// ===== MAIN PAGE =====
-app.get('/', requireAuth, async (req, res) => {
+// Dashboard
+app.get('/', requireAuth, (req, res) => {
+  const channels = db.getAllChannels();
+  const apiKey = db.getConfig('api_key');
+  const balance = db.getConfig('last_balance') || '0';
+  const servicesJson = db.getConfig('services');
+  const services = servicesJson ? JSON.parse(servicesJson) : [];
+  
+  // Add services and stats to each channel
+  const channelsWithData = channels.map(channel => {
+    const channelServices = db.getChannelServices(channel.id);
+    const stats = db.getChannelStats(channel.id);
+    const processedVideos = db.getChannelProcessedVideos(channel.id);
+    
+    return {
+      ...channel,
+      services: channelServices,
+      stats: stats,
+      videosCount: processedVideos.length
+    };
+  });
+  
+  res.render('dashboard', {
+    channels: channelsWithData,
+    allServices: services,
+    apiKey: apiKey || '',
+    balance: balance,
+    totalChannels: channels.length,
+    runningChannels: channels.filter(c => c.is_running).length
+  });
+});
+
+// API Routes
+
+// Set API Key
+app.post('/api/set-api-key', requireAuth, async (req, res) => {
+  const { apiKey } = req.body;
+  
+  if (!apiKey) {
+    return res.json({ success: false, error: 'API Key không được để trống' });
+  }
+  
   try {
-    // ✅ FIX: Thêm await cho tất cả database calls
-    const channels = await db.getAllChannels();
-    const settings = await db.getAllSettings();
-    const stats = await db.getStats();
+    // Test API key
+    const balance = await api.checkBalance(apiKey);
     
-    // ✅ FIX: Parse services safely
-    let services = [];
-    if (settings && settings.services) {
-      try {
-        services = JSON.parse(settings.services);
-      } catch (e) {
-        console.error('Error parsing services:', e);
-        services = [];
-      }
+    if (balance !== null) {
+      db.setConfig('api_key', apiKey);
+      db.addLog(`✅ Đã cập nhật API Key - Số dư: $${balance}`, 'success');
+      
+      // Load services
+      await api.getServices(apiKey);
+      
+      res.json({ success: true, balance: balance });
+    } else {
+      res.json({ success: false, error: 'API Key không hợp lệ' });
     }
-    
-    res.render('index', {
-      channels: channels || [],
-      services: services,
-      stats: stats || { totalChannels: 0, activeChannels: 0, totalOrders: 0, todayOrders: 0 },
-      apiKey: settings.api_key || '',
-      username: req.session.username
-    });
   } catch (error) {
-    console.error('Error loading index page:', error);
-    res.status(500).send('Internal Server Error: ' + error.message);
+    res.json({ success: false, error: error.message });
   }
 });
 
-// ===== API ENDPOINTS =====
-
-// Get all channels
-app.get('/api/channels', requireAuth, async (req, res) => {
-  try {
-    const channels = await db.getAllChannels();
-    res.json({ success: true, data: channels });
-  } catch (error) {
-    console.error('Error getting channels:', error);
-    res.status(500).json({ success: false, error: error.message });
+// Get balance
+app.get('/api/balance', requireAuth, async (req, res) => {
+  const apiKey = db.getConfig('api_key');
+  if (!apiKey) {
+    return res.json({ success: false, error: 'API Key chưa được cấu hình' });
   }
+  
+  const balance = await api.checkBalance(apiKey);
+  res.json({ success: true, balance: balance });
 });
 
-// Add new channel
-app.post('/api/channels', requireAuth, async (req, res) => {
+// Load services
+app.post('/api/load-services', requireAuth, async (req, res) => {
+  const apiKey = db.getConfig('api_key');
+  if (!apiKey) {
+    return res.json({ success: false, error: 'API Key chưa được cấu hình' });
+  }
+  
+  const services = await api.getServices(apiKey);
+  res.json({ success: true, count: services.length });
+});
+
+// Add channel
+app.post('/api/channels', requireAuth, (req, res) => {
+  const { id, name, schedule, services, contentType } = req.body;
+  
+  if (!id || !name) {
+    return res.json({ success: false, error: 'Channel ID và tên không được để trống' });
+  }
+  
+  if (!services || services.length === 0) {
+    return res.json({ success: false, error: 'Vui lòng chọn ít nhất một dịch vụ' });
+  }
+  
+  // Check if channel exists
+  const existing = db.getChannel(id);
+  if (existing) {
+    return res.json({ success: false, error: 'Kênh đã tồn tại' });
+  }
+  
   try {
-    const { name, channel_id, schedule, service_id, quantity } = req.body;
-    
-    // Validate input
-    if (!name || !channel_id || !service_id || !quantity) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Missing required fields' 
-      });
-    }
-    
-    const result = await db.addChannel({
-      name,
-      channel_id,
+    db.addChannel({ 
+      id, 
+      name, 
       schedule: schedule || '',
-      service_id: parseInt(service_id),
-      quantity: parseInt(quantity)
+      content_type: contentType || 'both'
     });
+    db.setChannelServices(id, services);
+    db.addLog(`✅ Đã thêm kênh: ${name}`, 'success');
     
-    res.json({ success: true, data: result });
+    res.json({ success: true });
   } catch (error) {
-    console.error('Error adding channel:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.json({ success: false, error: error.message });
   }
 });
 
 // Update channel
-app.put('/api/channels/:id', requireAuth, async (req, res) => {
+app.put('/api/channels/:id', requireAuth, (req, res) => {
+  const { id } = req.params;
+  const { name, schedule, services, contentType } = req.body;
+  
+  const channel = db.getChannel(id);
+  if (!channel) {
+    return res.json({ success: false, error: 'Kênh không tồn tại' });
+  }
+  
   try {
-    const { id } = req.params;
-    const { name, channel_id, schedule, service_id, quantity } = req.body;
-    
-    await db.updateChannel(id, {
-      name,
-      channel_id,
+    db.updateChannel(id, { 
+      name, 
       schedule,
-      service_id: parseInt(service_id),
-      quantity: parseInt(quantity)
+      content_type: contentType
     });
     
-    // Restart scheduler for this channel if it's active
-    const channel = await db.getChannel(id);
-    if (channel && channel.is_active) {
-      await scheduler.restartJob(parseInt(id));
+    if (services) {
+      db.setChannelServices(id, services);
     }
     
+    // Restart if running
+    if (channel.is_running) {
+      scheduler.stopChannelMonitoring(id);
+      scheduler.startChannelMonitoring(id);
+    }
+    
+    db.addLog(`✅ Đã cập nhật kênh: ${name}`, 'success', id);
     res.json({ success: true });
   } catch (error) {
-    console.error('Error updating channel:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.json({ success: false, error: error.message });
   }
 });
 
 // Delete channel
-app.delete('/api/channels/:id', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    // Stop scheduler first
-    scheduler.stopJob(parseInt(id));
-    
-    // Delete from database
-    await db.deleteChannel(parseInt(id));
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error deleting channel:', error);
-    res.status(500).json({ success: false, error: error.message });
+app.delete('/api/channels/:id', requireAuth, (req, res) => {
+  const { id } = req.params;
+  
+  const channel = db.getChannel(id);
+  if (!channel) {
+    return res.json({ success: false, error: 'Kênh không tồn tại' });
   }
+  
+  scheduler.stopChannelMonitoring(id);
+  db.deleteChannel(id);
+  db.addLog(`🗑️ Đã xóa kênh: ${channel.name}`, 'info');
+  
+  res.json({ success: true });
 });
 
 // Start channel
-app.post('/api/channels/start/:id', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    // Update status in database
-    await db.updateChannelStatus(parseInt(id), true);
-    
-    // Get channel data
-    const channel = await db.getChannel(parseInt(id));
-    
-    // Start scheduler
-    scheduler.startScheduledJob(channel);
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error starting channel:', error);
-    res.status(500).json({ success: false, error: error.message });
+app.post('/api/channels/:id/start', requireAuth, (req, res) => {
+  const { id } = req.params;
+  
+  const channel = db.getChannel(id);
+  if (!channel) {
+    return res.json({ success: false, error: 'Kênh không tồn tại' });
   }
+  
+  db.updateChannel(id, { is_running: 1 });
+  scheduler.startChannelMonitoring(id);
+  
+  res.json({ success: true });
 });
 
 // Stop channel
-app.post('/api/channels/stop/:id', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    // Stop scheduler
-    scheduler.stopJob(parseInt(id));
-    
-    // Update status in database
-    await db.updateChannelStatus(parseInt(id), false);
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error stopping channel:', error);
-    res.status(500).json({ success: false, error: error.message });
+app.post('/api/channels/:id/stop', requireAuth, (req, res) => {
+  const { id } = req.params;
+  
+  const channel = db.getChannel(id);
+  if (!channel) {
+    return res.json({ success: false, error: 'Kênh không tồn tại' });
   }
+  
+  db.updateChannel(id, { is_running: 0 });
+  scheduler.stopChannelMonitoring(id);
+  
+  res.json({ success: true });
 });
-
-// Start all channels
-app.post('/api/channels/start-all', requireAuth, async (req, res) => {
-  try {
-    const channels = await db.getActiveChannels();
-    
-    channels.forEach(channel => {
-      scheduler.startScheduledJob(channel);
-    });
-    
-    res.json({ success: true, count: channels.length });
-  } catch (error) {
-    console.error('Error starting all channels:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Stop all channels
-app.post('/api/channels/stop-all', requireAuth, async (req, res) => {
-  try {
-    scheduler.stopAllJobs();
-    
-    // Update all channels to inactive
-    const channels = await db.getAllChannels();
-    for (const channel of channels) {
-      await db.updateChannelStatus(channel.id, false);
-    }
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error stopping all channels:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ===== API KEY & SERVICES =====
-
-// Save API key
-app.post('/api/config/api-key', requireAuth, async (req, res) => {
-  try {
-    const { api_key } = req.body;
-    
-    if (!api_key) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'API key is required' 
-      });
-    }
-    
-    // Save to database
-    await db.saveConfig('api_key', api_key);
-    
-    // Set in tutmxhApi
-    tutmxhApi.setApiKey(api_key);
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error saving API key:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Load services from TUTMXH
-app.get('/api/services', requireAuth, async (req, res) => {
-  try {
-    // Get API key from database
-    const apiKey = await db.getConfig('api_key');
-    
-    if (!apiKey) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'API key not configured' 
-      });
-    }
-    
-    // Set API key
-    tutmxhApi.setApiKey(apiKey);
-    
-    // Fetch services
-    const result = await tutmxhApi.getServices();
-    
-    if (result.success) {
-      // Save to database
-      await db.saveConfig('services', JSON.stringify(result.data));
-      res.json({ success: true, data: result.data });
-    } else {
-      res.status(500).json({ success: false, error: result.error });
-    }
-  } catch (error) {
-    console.error('Error loading services:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Check balance
-app.get('/api/balance', requireAuth, async (req, res) => {
-  try {
-    const apiKey = await db.getConfig('api_key');
-    
-    if (!apiKey) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'API key not configured' 
-      });
-    }
-    
-    tutmxhApi.setApiKey(apiKey);
-    const result = await tutmxhApi.getBalance();
-    
-    res.json(result);
-  } catch (error) {
-    console.error('Error checking balance:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ===== LOGS =====
 
 // Get logs
-app.get('/api/logs', requireAuth, async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 100;
-    const logs = await db.getLogs(limit);
-    res.json({ success: true, data: logs });
-  } catch (error) {
-    console.error('Error getting logs:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
+app.get('/api/logs', requireAuth, (req, res) => {
+  const logs = db.getLogs(200);
+  res.json({ success: true, logs: logs });
 });
 
-// Get logs by channel
-app.get('/api/logs/channel/:id', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const limit = parseInt(req.query.limit) || 50;
-    const logs = await db.getLogsByChannel(parseInt(id), limit);
-    res.json({ success: true, data: logs });
-  } catch (error) {
-    console.error('Error getting channel logs:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
+// Clear logs
+app.delete('/api/logs', requireAuth, (req, res) => {
+  db.clearLogs();
+  res.json({ success: true });
 });
 
-// ===== ORDERS =====
-
-// Get all orders
-app.get('/api/orders', requireAuth, async (req, res) => {
-  try {
-    const orders = await db.getOrderHistory();
-    res.json({ success: true, data: orders });
-  } catch (error) {
-    console.error('Error getting orders:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Get orders by channel
-app.get('/api/orders/channel/:id', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const orders = await db.getOrdersByChannel(parseInt(id));
-    res.json({ success: true, data: orders });
-  } catch (error) {
-    console.error('Error getting channel orders:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ===== STATS =====
-
-// Get statistics
-app.get('/api/stats', requireAuth, async (req, res) => {
-  try {
-    const stats = await db.getStats();
-    res.json({ success: true, data: stats });
-  } catch (error) {
-    console.error('Error getting stats:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ===== ERROR HANDLER =====
-app.use((err, req, res, next) => {
-  console.error('Server error:', err);
-  res.status(500).json({ 
-    success: false, 
-    error: 'Internal Server Error',
-    message: err.message 
+// Get channel history
+app.get('/api/channels/:id/history', requireAuth, (req, res) => {
+  const { id } = req.params;
+  
+  const videos = db.getChannelProcessedVideos(id);
+  const videosWithOrders = videos.map(video => {
+    const orders = db.getVideoOrders(video.id);
+    return { ...video, orders };
   });
+  
+  res.json({ success: true, videos: videosWithOrders });
 });
 
-// ===== START SERVER =====
-app.listen(PORT, async () => {
+// Start server
+app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`🔗 Open: http://localhost:${PORT}`);
   
-  try {
-    // Wait for database to be ready
-    await db.waitReady();
-    
-    // Load API key if exists
-    const apiKey = await db.getConfig('api_key');
-    if (apiKey) {
-      tutmxhApi.setApiKey(apiKey);
-      console.log('✅ API key loaded');
-    }
-    
-    // Resume all active channels
-    console.log('📢 Resuming all active channels...');
-    await scheduler.resumeAllChannels();
-    
-  } catch (error) {
-    console.error('❌ Startup error:', error);
-  }
+  // Resume running channels
+  scheduler.resumeAllChannels();
+  
+  db.addLog('✅ Hệ thống đã khởi động', 'success');
 });
 
 // Graceful shutdown
-process.on('SIGTERM', async () => {
+process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully...');
-  scheduler.stopAllJobs();
-  await db.close();
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  console.log('SIGINT received, shutting down gracefully...');
-  scheduler.stopAllJobs();
-  await db.close();
+  db.addLog('⏹️ Hệ thống đang tắt', 'info');
   process.exit(0);
 });

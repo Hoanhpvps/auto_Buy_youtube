@@ -106,6 +106,7 @@ async function addNewChannel() {
     const name = document.getElementById('newChannelName').value.trim();
     const id = document.getElementById('newChannelId').value.trim();
     const schedule = document.getElementById('newChannelSchedule').value.trim();
+    const contentType = document.getElementById('newChannelContentType').value;
     
     if (!name || !id) {
         alert('Vui lòng nhập tên kênh và Channel ID!');
@@ -143,6 +144,7 @@ async function addNewChannel() {
         id: channelId,
         name: name,
         schedule: schedule,
+        contentType: contentType,
         services: services
     });
     
@@ -162,6 +164,7 @@ function showEditChannelModal(channelId) {
     document.getElementById('editChannelId').value = channelId;
     document.getElementById('editChannelName').value = channel.name;
     document.getElementById('editChannelSchedule').value = channel.schedule || '';
+    document.getElementById('editChannelContentType').value = channel.content_type || 'both';
     
     renderEditServices(channel);
     document.getElementById('editChannelModal').classList.add('active');
@@ -205,6 +208,7 @@ async function saveChannelEdit() {
     const channelId = document.getElementById('editChannelId').value;
     const name = document.getElementById('editChannelName').value.trim();
     const schedule = document.getElementById('editChannelSchedule').value.trim();
+    const contentType = document.getElementById('editChannelContentType').value;
     
     // Get selected services
     const services = [];
@@ -227,6 +231,7 @@ async function saveChannelEdit() {
     const result = await apiCall(`/api/channels/${channelId}`, 'PUT', {
         name: name,
         schedule: schedule,
+        contentType: contentType,
         services: services
     });
     

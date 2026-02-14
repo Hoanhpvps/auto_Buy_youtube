@@ -1,266 +1,298 @@
 const cron = require('node-cron');
-const axios = require('axios');
 const db = require('./database');
-const tutmxhApi = require('./tutmxh-api');
+const api = require('./tutmxh-api');
 
-class Scheduler {
-  constructor() {
-    this.jobs = new Map();
-    this.continuousJobs = new Map();
-  }
+// Active intervals for continuous monitoring
+const channelIntervals = {};
 
-  // ===== FIX: Hàm kiểm tra xem hiện tại có phải giờ đặt lịch không =====
-  isScheduledTime(scheduleString) {
-    if (!scheduleString || scheduleString.trim() === '') {
-      return true; // Nếu không có lịch, cho phép chạy mọi lúc
+// Parse schedule string
+function parseSchedule(scheduleStr) {
+  if (!scheduleStr) return [];
+  
+  const times = scheduleStr.split(',').map(t => t.trim()).filter(t => t);
+  const result = [];
+  
+  for (const timeStr of times) {
+    const match = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+    if (match) {
+      const hours = parseInt(match[1]);
+      const minutes = parseInt(match[2]);
+      if (hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60) {
+        result.push({
+          hours: hours,
+          minutes: minutes,
+          display: `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`
+        });
+      }
     }
+  }
+  
+  return result;
+}
 
+// Check if current time matches schedule
+function isScheduledTime(scheduleTimes) {
+  const now = new Date();
+  return scheduleTimes.some(time => 
+    time.hours === now.getHours() && time.minutes === now.getMinutes()
+  );
+}
+
+// Process a single channel
+async function checkChannel(channelId) {
+  const channel = db.getChannel(channelId);
+  if (!channel || !channel.is_running) return;
+  
+  const apiKey = db.getConfig('api_key');
+  if (!apiKey) {
+    db.addLog('API Key chưa được cấu hình', 'error', channelId);
+    return;
+  }
+  
+  try {
     const now = new Date();
-    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
     
-    const scheduledTimes = scheduleString.split(',').map(t => t.trim());
+    db.addLog(`🔍 Kiểm tra video mới lúc ${timeStr}...`, 'info', channelId);
     
-    // Kiểm tra xem giờ hiện tại có trong danh sách lịch không
-    return scheduledTimes.includes(currentTime);
-  }
-
-  // ===== FIX: Hàm kiểm tra video đã được đặt hàng chưa =====
-  async isVideoAlreadyOrdered(videoId) {
-    try {
-      const orders = await db.getOrderHistory();
-      // Kiểm tra xem videoId có trong lịch sử đơn hàng không
-      return orders.some(order => order.video_id === videoId);
-    } catch (error) {
-      console.error('Error checking video history:', error);
-      return false;
-    }
-  }
-
-  // ===== FIX: Hàm check và tạo đơn hàng (có kiểm tra lịch) =====
-  async checkAndOrder(channel) {
-    const logEntry = {
-      channel_id: channel.id,
-      channel_name: channel.name,
-      timestamp: new Date().toISOString()
-    };
-
-    try {
-      // ===== KIỂM TRA 1: Có phải giờ đặt lịch không? =====
-      if (!this.isScheduledTime(channel.schedule)) {
-        const message = `⏰ Chưa đến giờ đặt lịch. Lịch: ${channel.schedule || 'Mỗi 5 phút'}`;
-        console.log(`[${channel.name}] ${message}`);
-        await db.addLog({
-          ...logEntry,
-          status: 'skipped',
-          message: message
-        });
-        return;
-      }
-
-      console.log(`[${channel.name}] ✅ Đúng giờ đặt lịch, bắt đầu kiểm tra kênh...`);
-
-      // Lấy video mới nhất
-      const channelUrl = `https://www.youtube.com/channel/${channel.channel_id}`;
-      const videoId = await this.getLatestVideoId(channelUrl);
-
-      if (!videoId) {
-        const message = '❌ Không tìm thấy video mới';
-        console.log(`[${channel.name}] ${message}`);
-        await db.addLog({
-          ...logEntry,
-          status: 'error',
-          message: message
-        });
-        return;
-      }
-
-      console.log(`[${channel.name}] 📹 Video mới nhất: ${videoId}`);
-
-      // ===== KIỂM TRA 2: Video đã được đặt hàng chưa? =====
-      const alreadyOrdered = await this.isVideoAlreadyOrdered(videoId);
-      if (alreadyOrdered) {
-        const message = `⏭️ Video ${videoId} đã được đặt hàng trước đó, bỏ qua`;
-        console.log(`[${channel.name}] ${message}`);
-        await db.addLog({
-          ...logEntry,
-          video_id: videoId,
-          status: 'skipped',
-          message: message
-        });
-        return;
-      }
-
-      // Tạo đơn hàng
-      const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-      console.log(`[${channel.name}] 🛒 Đặt hàng cho video: ${videoUrl}`);
-
-      const orderResult = await tutmxhApi.createOrder(
-        channel.service_id,
-        videoUrl,
-        channel.quantity
-      );
-
-      if (orderResult.success) {
-        // ===== FIX: Lấy order ID từ response.order (theo API mới) =====
-        const orderId = orderResult.data.order;
-
-        await db.saveOrder({
-          channel_id: channel.id,
-          video_id: videoId,
-          video_url: videoUrl,
-          service_id: channel.service_id,
-          quantity: channel.quantity,
-          order_id: orderId,
-          status: 'completed'
-        });
-
-        const message = `✅ Đặt hàng thành công! Order ID: ${orderId}`;
-        console.log(`[${channel.name}] ${message}`);
-        
-        await db.addLog({
-          ...logEntry,
-          video_id: videoId,
-          order_id: orderId,
-          status: 'success',
-          message: message
-        });
-
-        // Cập nhật stats
-        await db.updateChannelStats(channel.id, {
-          total_orders: (channel.total_orders || 0) + 1,
-          last_check: new Date().toISOString()
-        });
-
-      } else {
-        const message = `❌ Lỗi đặt hàng: ${orderResult.error}`;
-        console.log(`[${channel.name}] ${message}`);
-        
-        await db.addLog({
-          ...logEntry,
-          video_id: videoId,
-          status: 'error',
-          message: message
-        });
-      }
-
-    } catch (error) {
-      const message = `❌ Lỗi: ${error.message}`;
-      console.error(`[${channel.name}] ${message}`, error);
-      
-      await db.addLog({
-        ...logEntry,
-        status: 'error',
-        message: message
-      });
-    }
-  }
-
-  // Lấy video ID mới nhất từ kênh YouTube
-  async getLatestVideoId(channelUrl) {
-    try {
-      const response = await axios.get(channelUrl);
-      const html = response.data;
-      
-      // Tìm video ID trong HTML
-      const match = html.match(/"videoId":"([^"]+)"/);
-      if (match && match[1]) {
-        return match[1];
-      }
-      
-      return null;
-    } catch (error) {
-      console.error('Error fetching channel:', error.message);
-      return null;
-    }
-  }
-
-  // Start scheduled job cho 1 kênh
-  startScheduledJob(channel) {
-    if (this.jobs.has(channel.id)) {
-      console.log(`[${channel.name}] Job đã chạy rồi`);
+    // Fetch latest video
+    const latestVideo = await api.fetchLatestVideo(channelId);
+    
+    if (!latestVideo) {
+      db.addLog('⚠️ Không tìm thấy video trong RSS feed', 'warning', channelId);
+      db.updateChannel(channelId, { last_checked: now.toISOString() });
       return;
     }
-
-    const schedule = channel.schedule;
     
-    if (!schedule || schedule.trim() === '') {
-      // Nếu không có lịch, chạy mỗi 5 phút
-      console.log(`[${channel.name}] 🔄 Bắt đầu chạy mỗi 5 phút`);
-      const job = cron.schedule('*/5 * * * *', async () => {
-        await this.checkAndOrder(channel);
-      });
-      
-      this.jobs.set(channel.id, job);
-      job.start();
-      
-    } else {
-      // Có lịch cụ thể
-      const times = schedule.split(',').map(t => t.trim());
-      console.log(`[${channel.name}] 📅 Bắt đầu lịch: ${times.join(', ')}`);
-      
-      times.forEach(time => {
-        const [hour, minute] = time.split(':');
-        const cronExpression = `${minute} ${hour} * * *`;
-        
-        const job = cron.schedule(cronExpression, async () => {
-          await this.checkAndOrder(channel);
-        });
-        
-        const jobKey = `${channel.id}_${time}`;
-        this.jobs.set(jobKey, job);
-        job.start();
-      });
-    }
-  }
-
-  // Stop job của 1 kênh
-  stopJob(channelId) {
-    // Dừng tất cả jobs liên quan đến channel này
-    const jobsToStop = [];
+    db.addLog(`📺 Tìm thấy video: ${latestVideo.title}`, 'info', channelId);
+    db.addLog(`🔗 URL: ${latestVideo.url}`, 'info', channelId);
+    db.addLog(`🆔 Video ID: ${latestVideo.videoId}`, 'info', channelId);
     
-    for (const [key, job] of this.jobs.entries()) {
-      if (key === channelId || key.toString().startsWith(`${channelId}_`)) {
-        job.stop();
-        jobsToStop.push(key);
+    // Check if it's a livestream (if YouTube API is configured)
+    let isLivestream = false;
+    let livestreamInfo = null;
+    
+    if (process.env.YOUTUBE_API_KEY) {
+      livestreamInfo = await api.checkIfLivestream(latestVideo.videoId);
+      
+      if (livestreamInfo) {
+        isLivestream = livestreamInfo.isLivestream;
+        
+        if (isLivestream) {
+          const statusText = livestreamInfo.status === 'live' ? '🔴 ĐANG LIVE' : 
+                           livestreamInfo.status === 'upcoming' ? '📅 SẮP LIVE' : 
+                           '🎥 Livestream';
+          db.addLog(`${statusText}`, 'success', channelId);
+        } else {
+          db.addLog(`📹 Video thường`, 'info', channelId);
+        }
       }
     }
     
-    jobsToStop.forEach(key => this.jobs.delete(key));
+    // Check content type filter
+    const contentType = channel.content_type || 'both';
     
-    console.log(`Stopped ${jobsToStop.length} job(s) for channel ${channelId}`);
-  }
-
-  // Restart job của 1 kênh
-  async restartJob(channelId) {
-    this.stopJob(channelId);
-    const channel = await db.getChannel(channelId);
-    if (channel) {
-      this.startScheduledJob(channel);
+    if (contentType === 'video_only' && isLivestream) {
+      db.addLog(`⏭️ Bỏ qua - Kênh chỉ xử lý video thường`, 'info', channelId);
+      db.updateChannel(channelId, { 
+        last_video_id: latestVideo.videoId,
+        last_checked: now.toISOString() 
+      });
+      return;
     }
-  }
-
-  // Start tất cả jobs đang active
-  async startAllActiveJobs() {
-    const channels = await db.getActiveChannels();
-    console.log(`Starting ${channels.length} active channel(s)...`);
     
-    channels.forEach(channel => {
-      this.startScheduledJob(channel);
+    if (contentType === 'livestream_only' && !isLivestream) {
+      db.addLog(`⏭️ Bỏ qua - Kênh chỉ xử lý livestream`, 'info', channelId);
+      db.updateChannel(channelId, { 
+        last_video_id: latestVideo.videoId,
+        last_checked: now.toISOString() 
+      });
+      return;
+    }
+    
+    // Check if video is recent (published in last 15 minutes)
+    const isRecent = api.isRecentVideo(latestVideo.published, 15);
+    if (!isRecent) {
+      const minutesAgo = Math.round((new Date() - latestVideo.published) / 1000 / 60);
+      db.addLog(`⏰ Video đã được public ${minutesAgo} phút trước (không đủ mới)`, 'info', channelId);
+    }
+    
+    // Check if it's a new video (so far not seen in this run)
+    const isNewVideo = channel.last_video_id !== latestVideo.videoId;
+    
+    // ⛔ KIỂM TRA: Video đã được xử lý trong DB chưa? (bảo vệ tránh đặt đơn trùng)
+    const existingProcessed = db.getProcessedVideo(channelId, latestVideo.videoId);
+    
+    db.updateChannel(channelId, { 
+      last_video_id: latestVideo.videoId,
+      last_checked: now.toISOString() 
     });
-  }
-
-  // ===== THÊM HÀM NÀY: Resume all active channels (alias của startAllActiveJobs) =====
-  async resumeAllChannels() {
-    console.log('📢 Resuming all active channels...');
-    await this.startAllActiveJobs();
-  }
-
-  // Stop tất cả jobs
-  stopAllJobs() {
-    this.jobs.forEach(job => job.stop());
-    this.jobs.clear();
-    console.log('All jobs stopped');
+    
+    if (!isNewVideo || existingProcessed) {
+      if (existingProcessed) {
+        // Kiểm tra xem đã đặt đơn chưa
+        const existingOrders = db.getVideoOrders(existingProcessed.id);
+        if (existingOrders.length > 0) {
+          db.addLog(`⏭️ Video đã được đặt đơn trước đó (${existingOrders.length} đơn) - Bỏ qua`, 'info', channelId);
+          return;
+        }
+        // Video đã biết nhưng chưa có đơn nào → tiếp tục đặt đơn
+        db.addLog(`🔄 Video đã biết nhưng chưa có đơn, tiếp tục xử lý...`, 'info', channelId);
+      } else {
+        db.addLog(`ℹ️ Video hiện tại đã được xử lý trước đó`, 'info', channelId);
+        db.addLog(`💡 Hệ thống đang chờ video mới xuất hiện`, 'info', channelId);
+        return;
+      }
+    }
+    
+    // New video detected (or existing video without orders)!
+    db.addLog(`🆕 VIDEO MỚI PHÁT HIỆN!`, 'success', channelId);
+    
+    // Check if already processed (get or create record)
+    let processedVideo = existingProcessed || db.getProcessedVideo(channelId, latestVideo.videoId);
+    
+    if (!processedVideo) {
+      const pvId = db.addProcessedVideo(channelId, latestVideo.videoId, latestVideo.title, latestVideo.url, isLivestream);
+      processedVideo = { id: pvId };
+    }
+    
+    // Get channel services
+    const channelServices = db.getChannelServices(channelId);
+    
+    if (channelServices.length === 0) {
+      db.addLog('⚠️ Kênh chưa có dịch vụ nào được chọn', 'warning', channelId);
+      return;
+    }
+    
+    // Get services list
+    const servicesJson = db.getConfig('services');
+    const allServices = servicesJson ? JSON.parse(servicesJson) : [];
+    
+    let orderedCount = 0;
+    
+    for (const selectedService of channelServices) {
+      const service = allServices.find(s => s.service == selectedService.service_id);
+      const serviceName = service ? service.name : `Service #${selectedService.service_id}`;
+      
+      // Check if already ordered
+      if (db.hasServiceOrder(processedVideo.id, selectedService.service_id)) {
+        db.addLog(`⏭️ Bỏ qua ${serviceName} - Đã mua`, 'info', channelId);
+        continue;
+      }
+      
+      db.addLog(`📦 Tạo đơn: ${serviceName} (SL: ${selectedService.quantity})...`, 'info', channelId);
+      
+      try {
+        const orderId = await api.createOrder(
+          apiKey,
+          latestVideo.url,
+          selectedService.service_id,
+          selectedService.quantity
+        );
+        
+        if (orderId) {
+          db.addLog(`✅ Đơn #${orderId} - ${serviceName}`, 'success', channelId);
+          db.addVideoOrder(processedVideo.id, selectedService.service_id, orderId, selectedService.quantity);
+          orderedCount++;
+        }
+      } catch (error) {
+        db.addLog(`❌ Lỗi tạo đơn ${serviceName}: ${error.message}`, 'error', channelId);
+      }
+      
+      // Wait 2 seconds between orders
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    if (orderedCount > 0) {
+      db.addLog(`✨ Hoàn thành ${orderedCount} đơn hàng`, 'success', channelId);
+      // Update balance
+      await api.checkBalance(apiKey);
+    } else {
+      db.addLog(`⚠️ Không tạo được đơn hàng nào`, 'warning', channelId);
+    }
+    
+  } catch (error) {
+    console.error(`Error checking channel ${channelId}:`, error);
+    db.addLog(`❌ Lỗi: ${error.message}`, 'error', channelId);
   }
 }
 
-module.exports = new Scheduler();
+// Start monitoring a channel
+function startChannelMonitoring(channelId) {
+  stopChannelMonitoring(channelId); // Stop if already running
+  
+  const channel = db.getChannel(channelId);
+  if (!channel) return;
+  
+  db.addLog('🚀 Bắt đầu theo dõi kênh', 'success', channelId);
+  
+  const schedule = channel.schedule ? channel.schedule.trim() : '';
+  
+  if (schedule === '') {
+    // Chế độ liên tục: check ngay + mỗi 5 phút
+    db.addLog('⏰ Chế độ: Liên tục (mỗi 5 phút)', 'info', channelId);
+    checkChannel(channelId); // Check ngay lần đầu
+    channelIntervals[channelId] = setInterval(() => {
+      checkChannel(channelId);
+    }, 5 * 60 * 1000);
+  } else {
+    // Chế độ theo lịch: KHÔNG check ngay, chỉ check khi đúng giờ đặt lịch
+    const scheduleTimes = parseSchedule(schedule);
+    if (scheduleTimes.length > 0) {
+      db.addLog(`⏰ Chế độ: Theo lịch (${scheduleTimes.map(t => t.display).join(', ')}) - Chờ đến giờ...`, 'info', channelId);
+      
+      let lastCheckMinute = null;
+      
+      // Kiểm tra mỗi 10 giây xem đã đến giờ chưa
+      channelIntervals[channelId] = setInterval(() => {
+        const now = new Date();
+        const currentMinute = `${now.getHours()}:${now.getMinutes()}`;
+        
+        // Tránh check nhiều lần trong cùng một phút
+        if (lastCheckMinute === currentMinute) {
+          return;
+        }
+        
+        if (isScheduledTime(scheduleTimes)) {
+          lastCheckMinute = currentMinute;
+          const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+          db.addLog(`⏰ ĐÃ ĐẾN GIỜ CHẠY: ${timeStr}`, 'success', channelId);
+          checkChannel(channelId);
+        }
+      }, 10000);
+    } else {
+      db.addLog('⚠️ Lịch không hợp lệ, chuyển sang chế độ liên tục (mỗi 5 phút)', 'warning', channelId);
+      checkChannel(channelId);
+      channelIntervals[channelId] = setInterval(() => {
+        checkChannel(channelId);
+      }, 5 * 60 * 1000);
+    }
+  }
+}
+
+// Stop monitoring a channel
+function stopChannelMonitoring(channelId) {
+  if (channelIntervals[channelId]) {
+    clearInterval(channelIntervals[channelId]);
+    delete channelIntervals[channelId];
+    db.addLog('⏹️ Đã dừng theo dõi kênh', 'info', channelId);
+  }
+}
+
+// Resume all running channels on startup
+function resumeAllChannels() {
+  const channels = db.getAllChannels();
+  for (const channel of channels) {
+    if (channel.is_running) {
+      console.log(`Resuming channel: ${channel.name} (${channel.id})`);
+      startChannelMonitoring(channel.id);
+    }
+  }
+}
+
+module.exports = {
+  checkChannel,
+  startChannelMonitoring,
+  stopChannelMonitoring,
+  resumeAllChannels
+};

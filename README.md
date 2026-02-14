@@ -70,9 +70,36 @@ TUTMXH_API_KEY=your_api_key_here
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your_password_123
 SESSION_SECRET=random_secret_key_change_this_12345
+YOUTUBE_API_KEY=your_youtube_api_key_here
 ```
 
-⚠️ **QUAN TRỌNG**: Thay đổi `ADMIN_PASSWORD` và `SESSION_SECRET` thành giá trị bảo mật của bạn!
+⚠️ **QUAN TRỌNG**: 
+- Thay đổi `ADMIN_PASSWORD` và `SESSION_SECRET` thành giá trị bảo mật của bạn!
+- `YOUTUBE_API_KEY` là **TÙY CHỌN** - chỉ cần nếu bạn muốn phân biệt video thường và livestream
+
+### **Lấy YouTube API Key (Tùy chọn - cho tính năng phân biệt livestream):**
+
+1. Vào: https://console.cloud.google.com/
+2. Tạo project mới hoặc chọn project có sẵn
+3. Enable "YouTube Data API v3":
+   - APIs & Services > Library
+   - Tìm "YouTube Data API v3"
+   - Click "Enable"
+4. Tạo credentials:
+   - APIs & Services > Credentials
+   - Create Credentials > API Key
+   - Copy API Key
+5. Paste vào `YOUTUBE_API_KEY` ở Environment Variables
+
+**Hạn mức miễn phí:**
+- 10,000 units/ngày (FREE forever)
+- Mỗi lần check video = 1 unit
+- Đủ cho 10,000 lần check/ngày
+
+**Lưu ý:** Nếu không cấu hình YouTube API Key:
+- Hệ thống vẫn hoạt động bình thường
+- Nhưng không thể phân biệt video thường vs livestream
+- Tất cả video sẽ được xử lý như "Cả hai"
 
 6. Click "Create Web Service"
 7. Đợi 3-5 phút để deploy
@@ -153,8 +180,16 @@ Sau khi xong, truy cập domain của bạn!
   - **Tên kênh**: Tên tùy ý
   - **Channel ID**: Lấy từ URL YouTube (phần UCxxx...)
   - **Lịch**: VD: `17:00,17:01,17:02,18:00` (hoặc để trống = mỗi 5 phút)
+  - **Loại nội dung**: 
+    - 🎬 Cả video thường và livestream (mặc định)
+    - 📹 Chỉ video thường
+    - 🔴 Chỉ livestream
 - Chọn dịch vụ và số lượng
 - Click "✅ Thêm kênh"
+
+**Lưu ý về Loại nội dung:**
+- Nếu có YouTube API Key: Hệ thống tự động phân biệt video/livestream
+- Nếu không có YouTube API Key: Chỉ option "Cả hai" hoạt động
 
 ### **4. Bật kênh**
 - Click "▶️ Chạy" ở kênh muốn bật
