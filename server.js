@@ -114,21 +114,18 @@ app.post('/api/set-api-key', requireAuth, async (req, res) => {
   }
   
   try {
-    // Test API key
+    // Test API key - checkBalance gio nem loi neu co van de
     const balance = await api.checkBalance(apiKey);
-    
-    if (balance !== null) {
-      db.setConfig('api_key', apiKey);
-      db.addLog(`✅ Đã cập nhật API Key - Số dư: $${balance}`, 'success');
-      
-      // Load services
-      await api.getServices(apiKey);
-      
-      res.json({ success: true, balance: balance });
-    } else {
-      res.json({ success: false, error: 'API Key không hợp lệ' });
-    }
+
+    db.setConfig('api_key', apiKey);
+    db.addLog(`✅ Đã cập nhật API Key - Số dư: $${balance}`, 'success');
+
+    // Load services
+    await api.getServices(apiKey);
+
+    res.json({ success: true, balance: balance });
   } catch (error) {
+    // Hien thi dung loi tra ve tu API (vi du: Invalid key, IP blocked, ...)
     res.json({ success: false, error: error.message });
   }
 });
@@ -140,8 +137,12 @@ app.get('/api/balance', requireAuth, async (req, res) => {
     return res.json({ success: false, error: 'API Key chưa được cấu hình' });
   }
   
-  const balance = await api.checkBalance(apiKey);
-  res.json({ success: true, balance: balance });
+  try {
+    const balance = await api.checkBalance(apiKey);
+    res.json({ success: true, balance: balance });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
 });
 
 // Load services
